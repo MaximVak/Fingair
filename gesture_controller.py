@@ -11,6 +11,9 @@ from config import (
     MIDDLE_TIP,
     PINCH_RELEASE_THRESHOLD,
     PINCH_START_THRESHOLD,
+    RIGHT_CLICK_INDEX_SEPARATION,
+    RIGHT_CLICK_RELEASE_THRESHOLD,
+    RIGHT_CLICK_START_THRESHOLD,
     SCROLL_COOLDOWN,
     SCROLL_DIRECTION_THRESHOLD,
     SCROLL_SENSITIVITY,
@@ -21,10 +24,15 @@ from config import (
 
 class GestureController:
     def __init__(self):
+        # Left-click and drag state
         self.is_pinching = False
         self.is_dragging = False
         self.pinch_start_time = 0.0
 
+        # Right-click state
+        self.is_right_pinching = False
+
+        # Scroll state
         self.is_scrolling = False
         self.last_scroll_time = 0.0
 
@@ -34,29 +42,6 @@ class GestureController:
             point_b[0] - point_a[0],
             point_b[1] - point_a[1],
         )
-
-    @staticmethod
-    def finger_is_up(points, tip_index, pip_index):
-        return points[tip_index][1] < points[pip_index][1]
-
-    @staticmethod
-    def finger_is_down(points, tip_index, pip_index):
-        return points[tip_index][1] > points[pip_index][1]
-
-    @staticmethod
-    def thumb_is_extended_sideways(points):
-        thumb_tip = points[THUMB_TIP]
-        index_pip = points[INDEX_PIP]
-
-        horizontal_distance = abs(
-            thumb_tip[0] - index_pip[0]
-        )
-
-        vertical_distance = abs(
-            thumb_tip[1] - index_pip[1]
-        )
-
-        return horizontal_distance > vertical_distance
 
     def get_scroll_direction(self, points):
         thumb_point = points[THUMB_TIP]
@@ -87,13 +72,17 @@ class GestureController:
         )
 
         fingers_point_up = (
-            index_vertical_change < -SCROLL_DIRECTION_THRESHOLD
-            and middle_vertical_change < -SCROLL_DIRECTION_THRESHOLD
+            index_vertical_change
+            < -SCROLL_DIRECTION_THRESHOLD
+            and middle_vertical_change
+            < -SCROLL_DIRECTION_THRESHOLD
         )
 
         fingers_point_down = (
-            index_vertical_change > SCROLL_DIRECTION_THRESHOLD
-            and middle_vertical_change > SCROLL_DIRECTION_THRESHOLD
+            index_vertical_change
+            > SCROLL_DIRECTION_THRESHOLD
+            and middle_vertical_change
+            > SCROLL_DIRECTION_THRESHOLD
         )
 
         if fingers_point_up:
@@ -112,6 +101,7 @@ class GestureController:
     ):
         if not self.is_scrolling:
             self.is_scrolling = True
+            self.last_scroll_time = current_time
             cursor_controller.sync_with_current_position()
 
         if (
@@ -140,11 +130,17 @@ class GestureController:
         frame_height,
     ):
         index_point = points[INDEX_TIP]
+        middle_point = points[MIDDLE_TIP]
         thumb_point = points[THUMB_TIP]
 
-        pinch_distance = self.calculate_distance(
+        index_pinch_distance = self.calculate_distance(
             thumb_point,
             index_point,
+        )
+
+        middle_pinch_distance = self.calculate_distance(
+            thumb_point,
+            middle_point,
         )
 
         current_time = time.perf_counter()
@@ -152,6 +148,48 @@ class GestureController:
         status_text = "MOVE"
         status_color = (255, 255, 255)
         hold_progress = None
+
+        # Start right-click gesture when thumb and middle finger
+        # touch while the index finger remains separated.
+        if (
+            not self.is_right_pinching
+            and not self.is_pinching
+            and not self.is_dragging
+            and middle_pinch_distance
+            < RIGHT_CLICK_START_THRESHOLD
+            and index_pinch_distance
+            > RIGHT_CLICK_INDEX_SEPARATION
+        ):
+            self.exit_scroll_mode(cursor_controller)
+            self.is_right_pinching = True
+
+        # Handle an active right-click pinch before all other controls.
+        if self.is_right_pinching:
+            if (
+                middle_pinch_distance
+                > RIGHT_CLICK_RELEASE_THRESHOLD
+            ):
+                pyautogui.rightClick()
+                self.is_right_pinching = False
+
+                cursor_controller.sync_with_current_position()
+
+                status_text = "RIGHT CLICK"
+                status_color = (255, 0, 255)
+            else:
+                # Keep cursor locked while the right-click
+                # gesture is being held.
+                status_text = "RIGHT-CLICK PINCH"
+                status_color = (255, 0, 255)
+
+            return {
+                "status_text": status_text,
+                "status_color": status_color,
+                "pinch_distance": index_pinch_distance,
+                "hold_progress": None,
+                "index_point": index_point,
+                "thumb_point": thumb_point,
+            }
 
         scroll_direction = self.get_scroll_direction(points)
 
@@ -176,7 +214,7 @@ class GestureController:
             return {
                 "status_text": status_text,
                 "status_color": status_color,
-                "pinch_distance": pinch_distance,
+                "pinch_distance": index_pinch_distance,
                 "hold_progress": None,
                 "index_point": index_point,
                 "thumb_point": thumb_point,
@@ -184,9 +222,11 @@ class GestureController:
 
         self.exit_scroll_mode(cursor_controller)
 
+        # Start left-click or drag pinch.
         if (
             not self.is_pinching
-            and pinch_distance < PINCH_START_THRESHOLD
+            and index_pinch_distance
+            < PINCH_START_THRESHOLD
         ):
             self.is_pinching = True
             self.pinch_start_time = current_time
@@ -196,7 +236,11 @@ class GestureController:
                 current_time - self.pinch_start_time
             )
 
-            if pinch_distance > PINCH_RELEASE_THRESHOLD:
+            # Release before moving the cursor.
+            if (
+                index_pinch_distance
+                > PINCH_RELEASE_THRESHOLD
+            ):
                 if self.is_dragging:
                     pyautogui.mouseUp()
                     self.is_dragging = False
@@ -206,7 +250,7 @@ class GestureController:
                 else:
                     pyautogui.click()
 
-                    status_text = "CLICK"
+                    status_text = "LEFT CLICK"
                     status_color = (0, 255, 0)
 
                 self.is_pinching = False
@@ -230,6 +274,8 @@ class GestureController:
                     status_text = "DRAGGING"
                     status_color = (0, 165, 255)
                 else:
+                    # Keep cursor locked while deciding whether
+                    # the gesture is a click or drag.
                     status_text = "PINCH - HOLD TO DRAG"
                     status_color = (0, 255, 255)
 
@@ -248,7 +294,7 @@ class GestureController:
         return {
             "status_text": status_text,
             "status_color": status_color,
-            "pinch_distance": pinch_distance,
+            "pinch_distance": index_pinch_distance,
             "hold_progress": hold_progress,
             "index_point": index_point,
             "thumb_point": thumb_point,
@@ -260,6 +306,7 @@ class GestureController:
 
         self.is_dragging = False
         self.is_pinching = False
+        self.is_right_pinching = False
         self.is_scrolling = False
 
     def cleanup(self):
@@ -268,4 +315,5 @@ class GestureController:
 
         self.is_dragging = False
         self.is_pinching = False
+        self.is_right_pinching = False
         self.is_scrolling = False
