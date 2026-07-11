@@ -5,15 +5,23 @@ import pyautogui
 
 from config import (
     DRAG_HOLD_TIME,
+    FIST_FINGER_MARGIN,
     INDEX_MCP,
+    INDEX_PIP,
     INDEX_TIP,
     MIDDLE_MCP,
+    MIDDLE_PIP,
     MIDDLE_TIP,
+    PAUSE_HOLD_TIME,
     PINCH_RELEASE_THRESHOLD,
     PINCH_START_THRESHOLD,
+    PINKY_PIP,
+    PINKY_TIP,
     RIGHT_CLICK_INDEX_SEPARATION,
     RIGHT_CLICK_RELEASE_THRESHOLD,
     RIGHT_CLICK_START_THRESHOLD,
+    RING_PIP,
+    RING_TIP,
     SCROLL_COOLDOWN,
     SCROLL_DIRECTION_THRESHOLD,
     SCROLL_SENSITIVITY,
@@ -36,12 +44,101 @@ class GestureController:
         self.is_scrolling = False
         self.last_scroll_time = 0.0
 
+        # Pause state
+        self.is_paused = False
+        self.fist_start_time = None
+        self.fist_toggle_ready = True
+
     @staticmethod
     def calculate_distance(point_a, point_b):
         return math.hypot(
             point_b[0] - point_a[0],
             point_b[1] - point_a[1],
         )
+
+    @staticmethod
+    def finger_is_folded(
+        points,
+        tip_index,
+        pip_index,
+    ):
+        return (
+            points[tip_index][1]
+            > points[pip_index][1] - FIST_FINGER_MARGIN
+        )
+
+    def fist_is_closed(self, points):
+        index_folded = self.finger_is_folded(
+            points,
+            INDEX_TIP,
+            INDEX_PIP,
+        )
+
+        middle_folded = self.finger_is_folded(
+            points,
+            MIDDLE_TIP,
+            MIDDLE_PIP,
+        )
+
+        ring_folded = self.finger_is_folded(
+            points,
+            RING_TIP,
+            RING_PIP,
+        )
+
+        pinky_folded = self.finger_is_folded(
+            points,
+            PINKY_TIP,
+            PINKY_PIP,
+        )
+
+        return (
+            index_folded
+            and middle_folded
+            and ring_folded
+            and pinky_folded
+        )
+
+    def release_active_controls(self):
+        if self.is_dragging:
+            pyautogui.mouseUp()
+
+        self.is_dragging = False
+        self.is_pinching = False
+        self.is_right_pinching = False
+        self.is_scrolling = False
+
+    def handle_pause_gesture(
+        self,
+        points,
+        cursor_controller,
+        current_time,
+    ):
+        fist_closed = self.fist_is_closed(points)
+
+        if fist_closed:
+            if self.fist_start_time is None:
+                self.fist_start_time = current_time
+
+            fist_duration = current_time - self.fist_start_time
+
+            if (
+                fist_duration >= PAUSE_HOLD_TIME
+                and self.fist_toggle_ready
+            ):
+                self.release_active_controls()
+
+                self.is_paused = not self.is_paused
+                self.fist_toggle_ready = False
+
+                cursor_controller.sync_with_current_position()
+
+                return True
+        else:
+            self.fist_start_time = None
+            self.fist_toggle_ready = True
+
+        return False
 
     def get_scroll_direction(self, points):
         thumb_point = points[THUMB_TIP]
@@ -122,6 +219,24 @@ class GestureController:
             self.is_scrolling = False
             cursor_controller.sync_with_current_position()
 
+    def make_result(
+        self,
+        status_text,
+        status_color,
+        pinch_distance,
+        hold_progress,
+        index_point,
+        thumb_point,
+    ):
+        return {
+            "status_text": status_text,
+            "status_color": status_color,
+            "pinch_distance": pinch_distance,
+            "hold_progress": hold_progress,
+            "index_point": index_point,
+            "thumb_point": thumb_point,
+        }
+
     def update(
         self,
         points,
@@ -145,12 +260,39 @@ class GestureController:
 
         current_time = time.perf_counter()
 
+        self.handle_pause_gesture(
+            points,
+            cursor_controller,
+            current_time,
+        )
+
+        # While paused, ignore every mouse control.
+        if self.is_paused:
+            return self.make_result(
+                status_text="PAUSED - HOLD FIST TO RESUME",
+                status_color=(0, 0, 255),
+                pinch_distance=index_pinch_distance,
+                hold_progress=None,
+                index_point=index_point,
+                thumb_point=thumb_point,
+            )
+
+        # Do not activate another gesture while the fist is closed.
+        if self.fist_is_closed(points):
+            return self.make_result(
+                status_text="HOLD FIST TO PAUSE",
+                status_color=(0, 255, 255),
+                pinch_distance=index_pinch_distance,
+                hold_progress=None,
+                index_point=index_point,
+                thumb_point=thumb_point,
+            )
+
         status_text = "MOVE"
         status_color = (255, 255, 255)
         hold_progress = None
 
-        # Start right-click gesture when thumb and middle finger
-        # touch while the index finger remains separated.
+        # Start right-click pinch.
         if (
             not self.is_right_pinching
             and not self.is_pinching
@@ -163,7 +305,7 @@ class GestureController:
             self.exit_scroll_mode(cursor_controller)
             self.is_right_pinching = True
 
-        # Handle an active right-click pinch before all other controls.
+        # Handle right-click pinch.
         if self.is_right_pinching:
             if (
                 middle_pinch_distance
@@ -177,20 +319,19 @@ class GestureController:
                 status_text = "RIGHT CLICK"
                 status_color = (255, 0, 255)
             else:
-                # Keep cursor locked while the right-click
-                # gesture is being held.
                 status_text = "RIGHT-CLICK PINCH"
                 status_color = (255, 0, 255)
 
-            return {
-                "status_text": status_text,
-                "status_color": status_color,
-                "pinch_distance": index_pinch_distance,
-                "hold_progress": None,
-                "index_point": index_point,
-                "thumb_point": thumb_point,
-            }
+            return self.make_result(
+                status_text,
+                status_color,
+                index_pinch_distance,
+                None,
+                index_point,
+                thumb_point,
+            )
 
+        # Handle scrolling.
         scroll_direction = self.get_scroll_direction(points)
 
         if (
@@ -211,14 +352,14 @@ class GestureController:
 
             status_color = (255, 255, 0)
 
-            return {
-                "status_text": status_text,
-                "status_color": status_color,
-                "pinch_distance": index_pinch_distance,
-                "hold_progress": None,
-                "index_point": index_point,
-                "thumb_point": thumb_point,
-            }
+            return self.make_result(
+                status_text,
+                status_color,
+                index_pinch_distance,
+                None,
+                index_point,
+                thumb_point,
+            )
 
         self.exit_scroll_mode(cursor_controller)
 
@@ -236,7 +377,6 @@ class GestureController:
                 current_time - self.pinch_start_time
             )
 
-            # Release before moving the cursor.
             if (
                 index_pinch_distance
                 > PINCH_RELEASE_THRESHOLD
@@ -274,8 +414,6 @@ class GestureController:
                     status_text = "DRAGGING"
                     status_color = (0, 165, 255)
                 else:
-                    # Keep cursor locked while deciding whether
-                    # the gesture is a click or drag.
                     status_text = "PINCH - HOLD TO DRAG"
                     status_color = (0, 255, 255)
 
@@ -291,29 +429,20 @@ class GestureController:
                 frame_height,
             )
 
-        return {
-            "status_text": status_text,
-            "status_color": status_color,
-            "pinch_distance": index_pinch_distance,
-            "hold_progress": hold_progress,
-            "index_point": index_point,
-            "thumb_point": thumb_point,
-        }
+        return self.make_result(
+            status_text,
+            status_color,
+            index_pinch_distance,
+            hold_progress,
+            index_point,
+            thumb_point,
+        )
 
     def handle_missing_hand(self):
-        if self.is_dragging:
-            pyautogui.mouseUp()
+        self.release_active_controls()
 
-        self.is_dragging = False
-        self.is_pinching = False
-        self.is_right_pinching = False
-        self.is_scrolling = False
+        self.fist_start_time = None
+        self.fist_toggle_ready = True
 
     def cleanup(self):
-        if self.is_dragging:
-            pyautogui.mouseUp()
-
-        self.is_dragging = False
-        self.is_pinching = False
-        self.is_right_pinching = False
-        self.is_scrolling = False
+        self.release_active_controls()
