@@ -39,9 +39,10 @@ SCROLL_SENSITIVITY = 75
 SCROLL_COOLDOWN = 0.04
 SCROLL_THUMB_DISTANCE_THRESHOLD = 100
 
-# Pause/resume settings
+# Pause/resume open-hand gesture settings
 PAUSE_HOLD_TIME = 0.6
-FIST_FINGER_MARGIN = 5
+OPEN_HAND_FINGER_MARGIN = 8
+OPEN_HAND_THUMB_DISTANCE = 55
 
 # MediaPipe settings
 MODEL_PATH = "hand_landmarker.task"

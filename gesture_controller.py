@@ -5,13 +5,14 @@ import pyautogui
 
 from config import (
     DRAG_HOLD_TIME,
-    FIST_FINGER_MARGIN,
     INDEX_MCP,
     INDEX_PIP,
     INDEX_TIP,
     MIDDLE_MCP,
     MIDDLE_PIP,
     MIDDLE_TIP,
+    OPEN_HAND_FINGER_MARGIN,
+    OPEN_HAND_THUMB_DISTANCE,
     PAUSE_HOLD_TIME,
     PINCH_RELEASE_THRESHOLD,
     PINCH_START_THRESHOLD,
@@ -46,8 +47,8 @@ class GestureController:
 
         # Pause state
         self.is_paused = False
-        self.fist_start_time = None
-        self.fist_toggle_ready = True
+        self.pause_gesture_start_time = None
+        self.pause_toggle_ready = True
 
     @staticmethod
     def calculate_distance(point_a, point_b):
@@ -57,46 +58,56 @@ class GestureController:
         )
 
     @staticmethod
-    def finger_is_folded(
+    def finger_is_extended(
         points,
         tip_index,
         pip_index,
     ):
         return (
             points[tip_index][1]
-            > points[pip_index][1] - FIST_FINGER_MARGIN
+            < points[pip_index][1] - OPEN_HAND_FINGER_MARGIN
         )
 
-    def fist_is_closed(self, points):
-        index_folded = self.finger_is_folded(
+    def open_hand_is_active(self, points):
+        index_extended = self.finger_is_extended(
             points,
             INDEX_TIP,
             INDEX_PIP,
         )
 
-        middle_folded = self.finger_is_folded(
+        middle_extended = self.finger_is_extended(
             points,
             MIDDLE_TIP,
             MIDDLE_PIP,
         )
 
-        ring_folded = self.finger_is_folded(
+        ring_extended = self.finger_is_extended(
             points,
             RING_TIP,
             RING_PIP,
         )
 
-        pinky_folded = self.finger_is_folded(
+        pinky_extended = self.finger_is_extended(
             points,
             PINKY_TIP,
             PINKY_PIP,
         )
 
+        thumb_distance = self.calculate_distance(
+            points[THUMB_TIP],
+            points[INDEX_MCP],
+        )
+
+        thumb_extended = (
+            thumb_distance > OPEN_HAND_THUMB_DISTANCE
+        )
+
         return (
-            index_folded
-            and middle_folded
-            and ring_folded
-            and pinky_folded
+            index_extended
+            and middle_extended
+            and ring_extended
+            and pinky_extended
+            and thumb_extended
         )
 
     def release_active_controls(self):
@@ -114,29 +125,31 @@ class GestureController:
         cursor_controller,
         current_time,
     ):
-        fist_closed = self.fist_is_closed(points)
+        open_hand = self.open_hand_is_active(points)
 
-        if fist_closed:
-            if self.fist_start_time is None:
-                self.fist_start_time = current_time
+        if open_hand:
+            if self.pause_gesture_start_time is None:
+                self.pause_gesture_start_time = current_time
 
-            fist_duration = current_time - self.fist_start_time
+            gesture_duration = (
+                current_time - self.pause_gesture_start_time
+            )
 
             if (
-                fist_duration >= PAUSE_HOLD_TIME
-                and self.fist_toggle_ready
+                gesture_duration >= PAUSE_HOLD_TIME
+                and self.pause_toggle_ready
             ):
                 self.release_active_controls()
 
                 self.is_paused = not self.is_paused
-                self.fist_toggle_ready = False
+                self.pause_toggle_ready = False
 
                 cursor_controller.sync_with_current_position()
 
                 return True
         else:
-            self.fist_start_time = None
-            self.fist_toggle_ready = True
+            self.pause_gesture_start_time = None
+            self.pause_toggle_ready = True
 
         return False
 
@@ -219,8 +232,8 @@ class GestureController:
             self.is_scrolling = False
             cursor_controller.sync_with_current_position()
 
+    @staticmethod
     def make_result(
-        self,
         status_text,
         status_color,
         pinch_distance,
@@ -266,10 +279,9 @@ class GestureController:
             current_time,
         )
 
-        # While paused, ignore every mouse control.
         if self.is_paused:
             return self.make_result(
-                status_text="PAUSED - HOLD FIST TO RESUME",
+                status_text="PAUSED - HOLD OPEN HAND TO RESUME",
                 status_color=(0, 0, 255),
                 pinch_distance=index_pinch_distance,
                 hold_progress=None,
@@ -277,10 +289,9 @@ class GestureController:
                 thumb_point=thumb_point,
             )
 
-        # Do not activate another gesture while the fist is closed.
-        if self.fist_is_closed(points):
+        if self.open_hand_is_active(points):
             return self.make_result(
-                status_text="HOLD FIST TO PAUSE",
+                status_text="HOLD OPEN HAND TO PAUSE",
                 status_color=(0, 255, 255),
                 pinch_distance=index_pinch_distance,
                 hold_progress=None,
@@ -441,8 +452,8 @@ class GestureController:
     def handle_missing_hand(self):
         self.release_active_controls()
 
-        self.fist_start_time = None
-        self.fist_toggle_ready = True
+        self.pause_gesture_start_time = None
+        self.pause_toggle_ready = True
 
     def cleanup(self):
         self.release_active_controls()
