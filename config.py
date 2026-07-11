@@ -1,6 +1,9 @@
 # Hand landmark indexes
 THUMB_TIP = 4
+INDEX_MCP = 5
 INDEX_TIP = 8
+MIDDLE_MCP = 9
+MIDDLE_TIP = 12
 
 # Camera control area
 FRAME_MARGIN_X = 120
@@ -16,6 +19,12 @@ PINCH_RELEASE_THRESHOLD = 50
 
 # How long a pinch must be held before dragging starts
 DRAG_HOLD_TIME = 0.3
+
+# Scrolling settings
+SCROLL_DIRECTION_THRESHOLD = 12
+SCROLL_SENSITIVITY = 75
+SCROLL_COOLDOWN = 0.04
+SCROLL_THUMB_DISTANCE_THRESHOLD = 100
 
 # MediaPipe settings
 MODEL_PATH = "hand_landmarker.task"
